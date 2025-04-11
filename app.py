@@ -143,128 +143,188 @@ if priority_mode != "None":
 # Main Logic
 # --------------------------
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
+    try:
+        df = pd.read_csv(uploaded_file)
+        
+        # Check if required columns exist
+        required_columns = ["URL", "Title", "Links", "Embedding"]
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        if missing_columns:
+            st.error(f"Error: Missing required columns: {', '.join(missing_columns)}")
+            st.stop()
+            
+        # Parse stringified arrays
+        try:
+            df["Links"] = df["Links"].apply(ast.literal_eval)
+            df["Embedding"] = df["Embedding"].apply(lambda x: np.array(ast.literal_eval(x)))
+        except Exception as e:
+            st.error(f"Error parsing Links or Embedding columns: {str(e)}")
+            st.info("Make sure Links column contains string representations of lists (e.g. '[\"url1\", \"url2\"]') and Embedding column contains string representations of numeric arrays.")
+            st.stop()
 
-    # Parse stringified arrays
-    df["Links"] = df["Links"].apply(ast.literal_eval)
-    df["Embedding"] = df["Embedding"].apply(lambda x: np.array(ast.literal_eval(x)))
+        urls = df["URL"].tolist()
+        titles = dict(zip(df["URL"], df["Title"]))
+        embeddings = np.vstack(df["Embedding"].values)
 
-    urls = df["URL"].tolist()
-    titles = dict(zip(df["URL"], df["Title"]))
-    embeddings = np.vstack(df["Embedding"].values)
+        # Count how many pages link to each page (inlinks)
+        inlink_counter = defaultdict(int)
+        for source_url, links in zip(df["URL"], df["Links"]):
+            for link in links:
+                # Some normalization to handle relative/absolute URLs
+                if link.startswith('/'):
+                    # Try to find a matching URL in our dataset
+                    for url in urls:
+                        if url.endswith(link):
+                            inlink_counter[url] += 1
+                            break
+                else:
+                    inlink_counter[link] += 1
 
-    # Count how many pages link to each page (inlinks)
-    inlink_counter = defaultdict(int)
-    for links in df["Links"]:
-        for link in links:
-            inlink_counter[link] += 1
-
-    # Build set of existing links
-    existing_links = set()
-    for source, links in zip(df["URL"], df["Links"]):
-        for target in links:
-            existing_links.add((source, target))
-
-    # Compute pairwise similarity
-    sim_matrix = cosine_similarity(embeddings)
-
-    # Target priority boost function
-    def target_priority_boost(target_url):
+        # Show information about inlink counts if using that prioritization
         if priority_mode == "Low inlink count":
-            # Lower inlink count = higher weight
-            # Add 1 to prevent division by zero
-            inlink_count = inlink_counter.get(target_url, 0) + 1
-            # Normalize the weight between 1 and priority_strength
-            normalized_boost = 1 + (priority_strength - 1) * (1 / inlink_count)
-            return normalized_boost
-        elif priority_mode == "URL contains keyword" and keyword:
-            # If URL contains keyword, apply the priority strength as boost
-            return priority_strength if keyword.lower() in target_url.lower() else 1.0
-        else:
-            return 1.0  # No boost
-
-    outbound_counter = defaultdict(int)
-    inbound_counter = defaultdict(int)
-    recommendations = []
-
-    for i, target_url in enumerate(urls):
-        if inlink_counter.get(target_url, 0) >= MAX_INBOUND:
-            continue
-
-        candidate_sims = []
-        for j, source_url in enumerate(urls):
-            if source_url == target_url:
-                continue
-            if (source_url, target_url) in existing_links:
-                continue
-            if outbound_counter[source_url] >= max_outbound_per_source:
-                continue
-
-            sim_score = sim_matrix[j, i]
-            if sim_score < min_similarity_threshold:
-                continue
-
-            # Apply priority boost
-            boost = target_priority_boost(target_url)
-            boosted_score = sim_score * boost
-            
-            # Store both the original similarity and boosted score
-            candidate_sims.append((source_url, target_url, boosted_score, sim_score))
-
-        # Sort by boosted score but keep track of original similarity
-        candidate_sims.sort(key=lambda x: x[2], reverse=True)
-
-        for source_url, target_url, boosted_score, orig_score in candidate_sims[:max_outbound_per_source]:
-            outbound_counter[source_url] += 1
-            inbound_counter[target_url] += 1
-            recommendations.append({
-                "SourceURL": source_url,
-                "SourceTitle": titles.get(source_url, ""),
-                "TargetURL": target_url,
-                "TargetTitle": titles.get(target_url, ""),
-                "SimilarityScore": round(orig_score, 4),
-                "PriorityBoost": round(boosted_score / orig_score, 2) if boosted_score != orig_score else 1.0,
-                "BoostedScore": round(boosted_score, 4),
-                "Status": "",
-                "Date": date.today().isoformat(),
-                "Notes": ""
+            st.subheader("📊 Current Inlink Distribution")
+            inlink_df = pd.DataFrame({
+                "URL": list(inlink_counter.keys()),
+                "Inlink Count": list(inlink_counter.values())
             })
+            inlink_df = inlink_df.sort_values("Inlink Count")
+            st.dataframe(inlink_df)
 
-    # --------------------------
-    # Output
-    # --------------------------
-    if recommendations:
-        recommendations_df = pd.DataFrame(recommendations)
-        
-        # Show information about prioritization if active
-        if priority_mode != "None":
-            st.info(f"✨ Target Prioritization: **{priority_mode}** (Boost Strength: {priority_strength}x)")
-            if priority_mode == "URL contains keyword" and keyword:
-                st.info(f"🔍 Prioritizing targets containing: **{keyword}**")
-        
-        st.success(f"✅ Found {len(recommendations_df)} internal link opportunities")
-        
-        # Create display columns that better explain the score boosting
-        display_df = recommendations_df.copy()
-        
-        # Determine columns to display based on prioritization
-        if priority_mode != "None":
-            columns_to_display = [
-                "SourceURL", "SourceTitle", "TargetURL", "TargetTitle", 
-                "SimilarityScore", "PriorityBoost", "BoostedScore",
-                "Status", "Date"
-            ]
-        else:
-            # Hide boost-related columns if not using prioritization
-            columns_to_display = [
-                "SourceURL", "SourceTitle", "TargetURL", "TargetTitle", 
-                "SimilarityScore", "Status", "Date"
-            ]
+        # Build set of existing links
+        existing_links = set()
+        for source, links in zip(df["URL"], df["Links"]):
+            for target in links:
+                # Some normalization to handle relative/absolute URLs
+                if target.startswith('/'):
+                    # Try to find a matching URL in our dataset
+                    for url in urls:
+                        if url.endswith(target):
+                            existing_links.add((source, url))
+                            break
+                else:
+                    existing_links.add((source, target))
+
+        # Compute pairwise similarity
+        sim_matrix = cosine_similarity(embeddings)
+
+        # Target priority boost function
+        def target_priority_boost(target_url):
+            if priority_mode == "Low inlink count":
+                # Lower inlink count = higher weight
+                # Add 1 to prevent division by zero
+                inlink_count = inlink_counter.get(target_url, 0) + 1
+                # Normalize the weight using logarithmic scaling for better distribution
+                boost = 1 + (priority_strength - 1) * (1 / np.log(inlink_count + 1.1))
+                return max(1.0, boost)  # Ensure minimum boost is 1.0
+                
+            elif priority_mode == "URL contains keyword" and keyword:
+                # If URL contains keyword, apply the priority strength as boost
+                return priority_strength if keyword.lower() in target_url.lower() else 1.0
+            else:
+                return 1.0  # No boost
+
+        outbound_counter = defaultdict(int)
+        inbound_counter = defaultdict(int)
+        recommendations = []
+
+        # Debug information
+        st.write(f"Analyzing {len(urls)} pages for linking opportunities...")
+        progress_bar = st.progress(0)
+
+        for i, target_url in enumerate(urls):
+            # Update progress
+            progress_bar.progress((i + 1) / len(urls))
             
-        st.dataframe(display_df[columns_to_display])
+            if inlink_counter.get(target_url, 0) >= MAX_INBOUND:
+                continue
 
-        # Include all columns in the download for analysis
-        csv = recommendations_df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CSV", data=csv, file_name="recommended_internal_links.csv", mime="text/csv")
-    else:
-        st.warning("No link recommendations found with current settings. Try adjusting the similarity threshold or prioritization settings.")
+            candidate_sims = []
+            for j, source_url in enumerate(urls):
+                if source_url == target_url:
+                    continue
+                if (source_url, target_url) in existing_links:
+                    continue
+                if outbound_counter[source_url] >= max_outbound_per_source:
+                    continue
+
+                sim_score = sim_matrix[j, i]
+                if sim_score < min_similarity_threshold:
+                    continue
+
+                # Apply priority boost
+                boost = target_priority_boost(target_url)
+                boosted_score = sim_score * boost
+                
+                # Store both the original similarity and boosted score
+                candidate_sims.append((source_url, target_url, boosted_score, sim_score, boost))
+
+            # Sort by boosted score but keep track of original similarity
+            candidate_sims.sort(key=lambda x: x[2], reverse=True)
+
+            for source_url, target_url, boosted_score, orig_score, boost in candidate_sims[:max_outbound_per_source]:
+                outbound_counter[source_url] += 1
+                inbound_counter[target_url] += 1
+                recommendations.append({
+                    "SourceURL": source_url,
+                    "SourceTitle": titles.get(source_url, ""),
+                    "TargetURL": target_url,
+                    "TargetTitle": titles.get(target_url, ""),
+                    "SimilarityScore": round(orig_score, 4),
+                    "PriorityBoost": round(boost, 2),
+                    "BoostedScore": round(boosted_score, 4),
+                    "Status": "",
+                    "Date": date.today().isoformat(),
+                    "Notes": ""
+                })
+
+        progress_bar.empty()
+        
+        # --------------------------
+        # Output
+        # --------------------------
+        if recommendations:
+            recommendations_df = pd.DataFrame(recommendations)
+            
+            # Show information about prioritization if active
+            if priority_mode != "None":
+                st.info(f"✨ Target Prioritization: **{priority_mode}** (Boost Strength: {priority_strength}x)")
+                if priority_mode == "URL contains keyword" and keyword:
+                    st.info(f"🔍 Prioritizing targets containing: **{keyword}**")
+            
+            st.success(f"✅ Found {len(recommendations_df)} internal link opportunities")
+            
+            # Create display columns that better explain the score boosting
+            display_df = recommendations_df.copy()
+            
+            # Determine columns to display based on prioritization
+            if priority_mode != "None":
+                columns_to_display = [
+                    "SourceURL", "SourceTitle", "TargetURL", "TargetTitle", 
+                    "SimilarityScore", "PriorityBoost", "BoostedScore",
+                    "Status", "Date"
+                ]
+                
+                # Sort by boosted score for clearer prioritization
+                display_df = display_df.sort_values("BoostedScore", ascending=False)
+            else:
+                # Hide boost-related columns if not using prioritization
+                columns_to_display = [
+                    "SourceURL", "SourceTitle", "TargetURL", "TargetTitle", 
+                    "SimilarityScore", "Status", "Date"
+                ]
+                
+                # Sort by similarity score when no prioritization
+                display_df = display_df.sort_values("SimilarityScore", ascending=False)
+                
+            st.dataframe(display_df[columns_to_display])
+
+            # Include all columns in the download for analysis
+            csv = recommendations_df.to_csv(index=False).encode("utf-8")
+            st.download_button("📥 Download CSV", data=csv, file_name="recommended_internal_links.csv", mime="text/csv")
+        else:
+            st.warning("No link recommendations found with current settings. Try adjusting the similarity threshold or prioritization settings.")
+    
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
+        st.info("Please check your input file format and try again.")
