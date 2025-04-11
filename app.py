@@ -1,79 +1,92 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import ast
 from collections import defaultdict
 from datetime import date
+from sklearn.metrics.pairwise import cosine_similarity
 
+st.set_page_config(page_title="Internal Link Recommender", layout="wide")
 st.title("🔗 Internal Link Recommendation Tool")
 
-st.markdown("Upload your datasets below:")
+# Upload single CSV
+uploaded_file = st.file_uploader("📄 Upload your single CSV file", type="csv")
 
-# Uploads
-pages_file = st.file_uploader("1. Upload Pages CSV (must include 'URL' & 'Title' columns)", type="csv")
-similarity_file = st.file_uploader("2. Upload Similarity Matrix (.npy)", type="npy")
-existing_links_file = st.file_uploader("3. Upload Existing Links CSV (columns: SourceURL, TargetURL)", type="csv")
-inlink_counts_file = st.file_uploader("4. Upload Inlink Counts CSV (columns: URL, InlinkCount)", type="csv")
-
-# Parameter controls
-st.sidebar.header("🔧 Settings")
+# Sidebar controls
+st.sidebar.header("⚙️ Settings")
 min_similarity_threshold = st.sidebar.slider("Minimum Similarity", 0.0, 1.0, 0.75)
-max_outbound = st.sidebar.number_input("Max Outbound per Source", min_value=1, value=3)
-max_inbound = st.sidebar.number_input("Max Inbound per Target", min_value=1, value=5)
+max_outbound_per_source = st.sidebar.number_input("Max Outbound per Source", min_value=1, value=3)
+max_inbound_per_target = st.sidebar.number_input("Max Inbound per Target", min_value=1, value=5)
 
-if all([pages_file, similarity_file, existing_links_file, inlink_counts_file]):
-    st.success("✅ All files uploaded. Ready to generate recommendations!")
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
 
-    pages_df = pd.read_csv(pages_file)
-    pages_df.set_index("URL", inplace=True)
+    # Parse columns
+    df["Links"] = df["Links"].apply(ast.literal_eval)
+    df["Embedding"] = df["Embedding"].apply(lambda x: np.array(ast.literal_eval(x)))
 
-    similarity_matrix = np.load(similarity_file)
-    urls = list(pages_df.index)
+    urls = df["URL"].tolist()
+    titles = dict(zip(df["URL"], df["Title"]))
+    embeddings = np.vstack(df["Embedding"].values)
 
-    existing_links_df = pd.read_csv(existing_links_file)
-    existing_links = set(tuple(x) for x in existing_links_df.to_records(index=False))
+    # Build inlink count
+    inlink_counter = defaultdict(int)
+    for links in df["Links"]:
+        for link in links:
+            inlink_counter[link] += 1
 
-    inlink_counts = pd.read_csv(inlink_counts_file).set_index("URL")["InlinkCount"].to_dict()
+    # Build existing link set
+    existing_links = set()
+    for source, links in zip(df["URL"], df["Links"]):
+        for target in links:
+            existing_links.add((source, target))
 
-    if st.button("🚀 Generate Link Recommendations"):
-        outbound_counter = defaultdict(int)
-        inbound_counter = defaultdict(int)
-        recommendations = []
+    # Compute pairwise similarity
+    sim_matrix = cosine_similarity(embeddings)
 
-        for i, target_url in enumerate(urls):
-            if inlink_counts.get(target_url, 0) >= max_inbound:
+    outbound_counter = defaultdict(int)
+    inbound_counter = defaultdict(int)
+    recommendations = []
+
+    for i, target_url in enumerate(urls):
+        if inlink_counter.get(target_url, 0) >= max_inbound_per_target:
+            continue
+
+        candidate_sims = []
+        for j, source_url in enumerate(urls):
+            if source_url == target_url:
+                continue
+            if (source_url, target_url) in existing_links:
+                continue
+            if outbound_counter[source_url] >= max_outbound_per_source:
                 continue
 
-            candidate_sims = []
-            for j, source_url in enumerate(urls):
-                if source_url == target_url:
-                    continue
-                if (source_url, target_url) in existing_links:
-                    continue
-                if outbound_counter[source_url] >= max_outbound:
-                    continue
-                sim_score = similarity_matrix[j, i]
-                if sim_score < min_similarity_threshold:
-                    continue
-                candidate_sims.append((source_url, target_url, sim_score))
+            sim_score = sim_matrix[j, i]
+            if sim_score < min_similarity_threshold:
+                continue
 
-            candidate_sims.sort(key=lambda x: x[2], reverse=True)
-            for source_url, target_url, score in candidate_sims[:max_outbound]:
-                outbound_counter[source_url] += 1
-                inbound_counter[target_url] += 1
-                recommendations.append({
-                    "SourceURL": source_url,
-                    "SourceTitle": pages_df.loc[source_url, "Title"],
-                    "TargetURL": target_url,
-                    "TargetTitle": pages_df.loc[target_url, "Title"],
-                    "SimilarityScore": score,
-                    "Status": "",
-                    "Date": date.today().isoformat(),
-                    "Notes": ""
-                })
+            candidate_sims.append((source_url, target_url, sim_score))
 
-        recommendations_df = pd.DataFrame(recommendations)
-        st.success(f"✅ {len(recommendations_df)} internal link opportunities found")
-        st.dataframe(recommendations_df)
+        candidate_sims.sort(key=lambda x: x[2], reverse=True)
 
-        csv = recommendations_df.to_csv(index=False).encode("utf-8")
-        st.download_button("📥 Download CSV", data=csv, file_name="recommended_internal_links.csv", mime="text/csv")
+        for source_url, target_url, score in candidate_sims[:max_outbound_per_source]:
+            outbound_counter[source_url] += 1
+            inbound_counter[target_url] += 1
+            recommendations.append({
+                "SourceURL": source_url,
+                "SourceTitle": titles[source_url],
+                "TargetURL": target_url,
+                "TargetTitle": titles[target_url],
+                "SimilarityScore": round(score, 4),
+                "Status": "",
+                "Date": date.today().isoformat(),
+                "Notes": ""
+            })
+
+    recommendations_df = pd.DataFrame(recommendations)
+
+    st.success(f"✅ Found {len(recommendations_df)} recommended internal links")
+    st.dataframe(recommendations_df)
+
+    csv = recommendations_df.to_csv(index=False).encode("utf-8")
+    st.download_button("📥 Download CSV", data=csv, file_name="recommended_internal_links.csv", mime="text/csv")
