@@ -9,19 +9,43 @@ from sklearn.metrics.pairwise import cosine_similarity
 st.set_page_config(page_title="Internal Link Recommender", layout="wide")
 st.title("🔗 Internal Link Recommendation Tool")
 
-# Upload single CSV
-uploaded_file = st.file_uploader("📄 Upload your single CSV file", type="csv")
+# --------------------------
+# 📘 App Description
+# --------------------------
+st.markdown("""
+This tool recommends **internal links** between your pages based on **semantic similarity**.
 
-# Sidebar controls
+### 📥 Input Format
+Upload a **single CSV file** with the following columns:
+
+- **URL** – The full URL of the page  
+- **Title** – The page title (for context)  
+- **Links** – A stringified list of internal links from this page (e.g. "['/page-a', '/page-b']")  
+- **Embedding** – A stringified list of numbers representing the page’s content embedding (e.g. "[0.12, -0.03, ...]")
+
+Embeddings should be generated beforehand using a model like OpenAI’s `text-embedding-ada-002`.
+
+The app uses those embeddings to find topically relevant pages that aren't already linked together, then suggests high-quality internal link opportunities.
+""")
+
+# --------------------------
+# File Upload
+# --------------------------
+uploaded_file = st.file_uploader("📄 Upload your CSV", type="csv")
+
+# --------------------------
+# Sidebar Controls
+# --------------------------
 st.sidebar.header("⚙️ Settings")
 min_similarity_threshold = st.sidebar.slider("Minimum Similarity", 0.0, 1.0, 0.75)
 max_outbound_per_source = st.sidebar.number_input("Max Outbound per Source", min_value=1, value=3)
-max_inbound_per_target = st.sidebar.number_input("Max Inbound per Target", min_value=1, value=5)
+
+MAX_INBOUND = 99999  # disable inbound limit
 
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
 
-    # Parse columns
+    # Parse stringified lists
     df["Links"] = df["Links"].apply(ast.literal_eval)
     df["Embedding"] = df["Embedding"].apply(lambda x: np.array(ast.literal_eval(x)))
 
@@ -49,7 +73,7 @@ if uploaded_file:
     recommendations = []
 
     for i, target_url in enumerate(urls):
-        if inlink_counter.get(target_url, 0) >= max_inbound_per_target:
+        if inlink_counter.get(target_url, 0) >= MAX_INBOUND:
             continue
 
         candidate_sims = []
@@ -74,9 +98,9 @@ if uploaded_file:
             inbound_counter[target_url] += 1
             recommendations.append({
                 "SourceURL": source_url,
-                "SourceTitle": titles[source_url],
+                "SourceTitle": titles.get(source_url, ""),
                 "TargetURL": target_url,
-                "TargetTitle": titles[target_url],
+                "TargetTitle": titles.get(target_url, ""),
                 "SimilarityScore": round(score, 4),
                 "Status": "",
                 "Date": date.today().isoformat(),
@@ -85,7 +109,7 @@ if uploaded_file:
 
     recommendations_df = pd.DataFrame(recommendations)
 
-    st.success(f"✅ Found {len(recommendations_df)} recommended internal links")
+    st.success(f"✅ Found {len(recommendations_df)} internal link opportunities")
     st.dataframe(recommendations_df)
 
     csv = recommendations_df.to_csv(index=False).encode("utf-8")
