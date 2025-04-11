@@ -20,7 +20,7 @@ Upload a single CSV file with all the necessary data. The app will find strong i
 
 with st.expander("🛠 How to Generate the Input CSV (using Screaming Frog)", expanded=False):
     st.markdown(""
-To use this tool, you’ll need a single CSV with the following columns:
+To use this tool, you will need a single CSV with the following columns:
 
 - `URL` — Full URL of the page  
 - `Title` — Page title  
