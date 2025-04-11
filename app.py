@@ -44,7 +44,7 @@ Go to `Configuration > Spider > Rendering`, and select **JavaScript Rendering**.
 
 #### 2. Add a Custom JavaScript Extractor for Internal Links
 
-Go to `Configuration > Custom > Extraction`, and add a new **JavaScript extractor**:
+Go to `Configuration > Custom > Custom Javascript`, and add a new **JavaScript extractor**:
 
 ```
 var internalLinks = [];
@@ -82,11 +82,7 @@ return seoSpider.data(internalLinks);
 
 #### 3. Enable OpenAI Embeddings
 
-Go to `Configuration > API Access > OpenAI`:
-
-- Enter your **OpenAI API key**
-- Enable **Embeddings**
-- Choose `text-embedding-3-small` (cheap and fast) or `text-embedding-3-large` (better quality)
+In the JS extractors library, there are several pre-built extractors that use OpenAI, use this one: (ChatGPT) Extract embeddings from page content. You'll need an OpenAI key, embeddings are dirt-cheap to generate and despite the name this extractor has nothing to do with ChatGPT.
 
 ---
 
