@@ -101,7 +101,7 @@ After crawling:
     - `Links` (from the JS extractor)
     - `Embedding` (from OpenAI)
 
-Upload the CSV above to use the tool.
+You'll have to rename the columns or set up custom names in SF. Upload the CSV above to use the tool.
 """)
 
 # --------------------------
