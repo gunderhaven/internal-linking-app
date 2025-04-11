@@ -101,7 +101,7 @@ After crawling:
     - `Links` (from the JS extractor)
     - `Embedding` (from OpenAI)
 
-You'll have to rename the columns or set up custom names in SF. Upload the CSV above to use the tool.
+Upload the CSV above to use the tool.
 """)
 
 # --------------------------
@@ -116,6 +116,28 @@ st.sidebar.header("⚙️ Settings")
 min_similarity_threshold = st.sidebar.slider("Minimum Similarity", 0.0, 1.0, 0.75)
 max_outbound_per_source = st.sidebar.number_input("Max Outbound per Source", min_value=1, value=3)
 MAX_INBOUND = 99999  # disables inbound cap
+
+# Target Prioritization Controls
+st.sidebar.subheader("📌 Target Prioritization") 
+priority_mode = st.sidebar.selectbox(
+    "Prioritize targets by", 
+    ["None", "Low inlink count", "URL contains keyword"]
+)
+
+keyword = ""
+if priority_mode == "URL contains keyword":
+    keyword = st.sidebar.text_input("Enter keyword (e.g. /blog/)")
+
+# Priority boost factor - how strong should the bias be
+priority_strength = 1.0
+if priority_mode != "None":
+    priority_strength = st.sidebar.slider(
+        "Priority Strength", 
+        min_value=0.5, 
+        max_value=5.0, 
+        value=2.0,
+        help="Higher values give stronger priority to targeted pages"
+    )
 
 # --------------------------
 # Main Logic
@@ -146,6 +168,21 @@ if uploaded_file:
     # Compute pairwise similarity
     sim_matrix = cosine_similarity(embeddings)
 
+    # Target priority boost function
+    def target_priority_boost(target_url):
+        if priority_mode == "Low inlink count":
+            # Lower inlink count = higher weight
+            # Add 1 to prevent division by zero
+            inlink_count = inlink_counter.get(target_url, 0) + 1
+            # Normalize the weight between 1 and priority_strength
+            normalized_boost = 1 + (priority_strength - 1) * (1 / inlink_count)
+            return normalized_boost
+        elif priority_mode == "URL contains keyword" and keyword:
+            # If URL contains keyword, apply the priority strength as boost
+            return priority_strength if keyword.lower() in target_url.lower() else 1.0
+        else:
+            return 1.0  # No boost
+
     outbound_counter = defaultdict(int)
     inbound_counter = defaultdict(int)
     recommendations = []
@@ -167,11 +204,17 @@ if uploaded_file:
             if sim_score < min_similarity_threshold:
                 continue
 
-            candidate_sims.append((source_url, target_url, sim_score))
+            # Apply priority boost
+            boost = target_priority_boost(target_url)
+            boosted_score = sim_score * boost
+            
+            # Store both the original similarity and boosted score
+            candidate_sims.append((source_url, target_url, boosted_score, sim_score))
 
+        # Sort by boosted score but keep track of original similarity
         candidate_sims.sort(key=lambda x: x[2], reverse=True)
 
-        for source_url, target_url, score in candidate_sims[:max_outbound_per_source]:
+        for source_url, target_url, boosted_score, orig_score in candidate_sims[:max_outbound_per_source]:
             outbound_counter[source_url] += 1
             inbound_counter[target_url] += 1
             recommendations.append({
@@ -179,7 +222,9 @@ if uploaded_file:
                 "SourceTitle": titles.get(source_url, ""),
                 "TargetURL": target_url,
                 "TargetTitle": titles.get(target_url, ""),
-                "SimilarityScore": round(score, 4),
+                "SimilarityScore": round(orig_score, 4),
+                "PriorityBoost": round(boosted_score / orig_score, 2) if boosted_score != orig_score else 1.0,
+                "BoostedScore": round(boosted_score, 4),
                 "Status": "",
                 "Date": date.today().isoformat(),
                 "Notes": ""
@@ -188,10 +233,38 @@ if uploaded_file:
     # --------------------------
     # Output
     # --------------------------
-    recommendations_df = pd.DataFrame(recommendations)
+    if recommendations:
+        recommendations_df = pd.DataFrame(recommendations)
+        
+        # Show information about prioritization if active
+        if priority_mode != "None":
+            st.info(f"✨ Target Prioritization: **{priority_mode}** (Boost Strength: {priority_strength}x)")
+            if priority_mode == "URL contains keyword" and keyword:
+                st.info(f"🔍 Prioritizing targets containing: **{keyword}**")
+        
+        st.success(f"✅ Found {len(recommendations_df)} internal link opportunities")
+        
+        # Create display columns that better explain the score boosting
+        display_df = recommendations_df.copy()
+        
+        # Determine columns to display based on prioritization
+        if priority_mode != "None":
+            columns_to_display = [
+                "SourceURL", "SourceTitle", "TargetURL", "TargetTitle", 
+                "SimilarityScore", "PriorityBoost", "BoostedScore",
+                "Status", "Date"
+            ]
+        else:
+            # Hide boost-related columns if not using prioritization
+            columns_to_display = [
+                "SourceURL", "SourceTitle", "TargetURL", "TargetTitle", 
+                "SimilarityScore", "Status", "Date"
+            ]
+            
+        st.dataframe(display_df[columns_to_display])
 
-    st.success(f"✅ Found {len(recommendations_df)} internal link opportunities")
-    st.dataframe(recommendations_df)
-
-    csv = recommendations_df.to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Download CSV", data=csv, file_name="recommended_internal_links.csv", mime="text/csv")
+        # Include all columns in the download for analysis
+        csv = recommendations_df.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Download CSV", data=csv, file_name="recommended_internal_links.csv", mime="text/csv")
+    else:
+        st.warning("No link recommendations found with current settings. Try adjusting the similarity threshold or prioritization settings.")
