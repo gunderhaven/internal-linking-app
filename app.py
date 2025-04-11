@@ -90,14 +90,14 @@ In the JS extractors library, there are several pre-built extractors that use Op
 
 After crawling:
 
-- Use `Export > All URLs`
+- Export the custom js extractions sheet
 - Ensure your CSV includes:
     - `URL`
     - `Title`
     - `Links` (from the JS extractor)
     - `Embedding` (from OpenAI)
 
-Upload the CSV above to use the tool.
+You'll probably need to rename your columns before uploading the sheet. This has no tolerance for rewriting columns (work in progress...).
 """)
 
 # --------------------------
