@@ -47,15 +47,68 @@ st.markdown(
     """
 This tool recommends **internal links** between your site's pages based on **semantic similarity** using page embeddings.
 
-Upload a single CSV file containing URL data, internal links, and precomputed embeddings.
+**What’s new:**
+- Map CSV columns to URL, Title, Links, and Embedding fields.
+- Adjust similarity threshold and limit outbound links per page.
+- Prioritize **targets** by low inlink count or URL keyword.
+- Prioritize **sources** by URL keyword.
+- Click **Run Analysis** after mapping and settings to generate results.
+- Get concise **anchor-text suggestions** via GPT‑4o.
+
+Upload a single CSV file containing URL data, existing internal links, and precomputed embeddings.
 """
 )
 
 with st.expander("🛠 How to Generate the Input CSV (using Screaming Frog)", expanded=False):
     st.markdown("""
-(Instructions unchanged)...
-""")
+To use this tool, your CSV must contain these columns:
 
+- `URL` - Full URL of the page  
+- `Title` - Page title  
+- `Links` - Stringified list of internal links from the page  
+- `Embedding` - Stringified list of embeddings (e.g. `[0.12, 0.33, -0.9, ...]`)
+
+Follow the Screaming Frog steps to extract links and embeddings, then upload here.
+
+* Enable JS rendering
+In Screaming Frog go to Configuration → Spider → Rendering and select JavaScript Rendering.
+
+* Extract internal links
+Under Configuration → Custom → Custom JavaScript, add a JS extractor that finds all <a> hrefs, filters out mailto/tel/javascript, keeps only same‑domain or relative URLs, then returns that array.
+
+Here's one option:
+```
+var internalLinks = [];
+var currentDomain = window.location.hostname;
+var allLinks = document.querySelectorAll('a[href]');
+allLinks.forEach(function(link) {
+    var href = link.getAttribute('href');
+    if (!href || href.startsWith('javascript:') || href.startsWith('mailto:') ||
+        href.startsWith('tel:') || href === '#' || href.startsWith('#')) {
+        return;
+    }
+    if (href.startsWith('/') || !href.includes('://')) {
+        // Convert relative URL to full URL
+        href = window.location.origin + href;
+    }
+    try {
+        var linkDomain = new URL(href).hostname;
+        if (linkDomain === currentDomain) {
+            internalLinks.push(href);
+        }
+    } catch (e) {
+        // Invalid URL, skip it
+    }
+});
+return seoSpider.data(JSON.stringify(internalLinks));
+```
+
+* Extract OpenAI embeddings
+In the JS extractors library choose the pre‑built “(ChatGPT) Extract embeddings from page content” extractor (you’ll need an OpenAI key).
+
+* Run crawl & export
+Crawl the site, then export the “Custom javascript” sheet. You don't need to rename the columns - just pair them up in the sidebar dropdown menus.
+""")
 # --------------------------
 # File Upload and Mapping
 # --------------------------
