@@ -53,7 +53,7 @@ This tool recommends **internal links** between your site's pages based on **sem
 - Prioritize **targets** by low inlink count or URL keyword.
 - Prioritize **sources** by URL keyword.
 - Click **Run Analysis** after mapping and settings to generate results.
-- Get concise **anchor-text suggestions** via GPT‑4o.
+- Get concise **anchor-text suggestions** via gpt-4o-mini-2024-07-18 (cheap and accurate).
 
 Upload a single CSV file containing URL data, existing internal links, and precomputed embeddings.
 """
