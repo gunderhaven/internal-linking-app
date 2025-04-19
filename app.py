@@ -3,7 +3,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import ast
-import openai
+
+# Attempt to import OpenAI; show error if missing
+try:
+    import openai
+except ImportError:
+    st.error("The 'openai' package is not installed. Please run 'pip install openai' and restart the app.")
+    st.stop()
+
 from collections import defaultdict
 from datetime import date
 from sklearn.metrics.pairwise import cosine_similarity
