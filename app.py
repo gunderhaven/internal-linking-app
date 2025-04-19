@@ -173,7 +173,7 @@ if uploaded_file:
             for idx, row in rec_df.iterrows():
                 prompt = f"Suggest concise anchor text for linking '{row['SourceTitle']}' to '{row['TargetTitle']}'."
                 try:
-                    resp = openai.ChatCompletion.create(
+                    resp = openai.chat.completions.create(
                         model="gpt-4o-mini-2024-07-18",
                         messages=[
                             {"role":"system","content":"You suggest concise anchor text for hyperlinks."},
