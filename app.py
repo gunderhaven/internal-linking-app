@@ -57,13 +57,10 @@ with st.expander("🛠 How to Generate the Input CSV (using Screaming Frog)", ex
 """)
 
 # --------------------------
-# File Upload
+# File Upload and Mapping
 # --------------------------
 uploaded_file = st.file_uploader("📄 Upload your CSV file", type="csv")
 
-# --------------------------
-# Column Mapping & Prioritization
-# --------------------------
 if uploaded_file:
     df = pd.read_csv(uploaded_file)
     cols = list(df.columns)
@@ -94,98 +91,108 @@ if uploaded_file:
     if source_priority_mode != "None":
         source_priority_strength = st.sidebar.slider("Source Priority Strength", 0.5, 5.0, 2.0, help="Higher values give stronger priority to source pages")
 
-    # --------------------------
-    # Main Logic
-    # --------------------------
-    try:
-        df["Links"] = df["Links"].apply(ast.literal_eval)
-        df["Embedding"] = df["Embedding"].apply(lambda x: np.array(ast.literal_eval(x)))
-        urls = df["URL"].tolist()
-        titles = dict(zip(df["URL"], df["Title"]))
-        embeddings = np.vstack(df["Embedding"].values)
+    # Run Button
+    run_analysis = st.sidebar.button("Run Analysis")
+    if not run_analysis:
+        st.info("After mapping your columns and adjusting settings, click 'Run Analysis' in the sidebar.")
+    else:
+        # --------------------------
+        # Main Logic
+        # --------------------------
+        try:
+            df["Links"] = df["Links"].apply(ast.literal_eval)
+            df["Embedding"] = df["Embedding"].apply(lambda x: np.array(ast.literal_eval(x)))
+            urls = df["URL"].tolist()
+            titles = dict(zip(df["URL"], df["Title"]))
+            embeddings = np.vstack(df["Embedding"].values)
 
-        # Count inlinks
-        inlink_counter = defaultdict(int)
-        for src, links in zip(df["URL"], df["Links"]):
-            for link in links:
-                if link.startswith('/'):
-                    for u in urls:
-                        if u.endswith(link): inlink_counter[u] += 1
-                else:
-                    inlink_counter[link] += 1
-        if target_priority_mode == "Low inlink count":
-            st.subheader("📊 Current Inlink Distribution")
-            st.dataframe(pd.DataFrame({"URL": list(inlink_counter), "Inlink Count": list(inlink_counter.values())}).sort_values("Inlink Count"))
-
-        # Build existing links
-        existing = set()
-        for src, links in zip(df["URL"], df["Links"]):
-            for t in links:
-                if t.startswith('/'):
-                    for u in urls:
-                        if u.endswith(t): existing.add((src, u))
-                else:
-                    existing.add((src, t))
-
-        sim_matrix = cosine_similarity(embeddings)
-
-        def target_boost(tgt):
+            # Count inlinks
+            inlink_counter = defaultdict(int)
+            for src, links in zip(df["URL"], df["Links"]):
+                for link in links:
+                    if link.startswith('/'):
+                        for u in urls:
+                            if u.endswith(link): inlink_counter[u] += 1
+                    else:
+                        inlink_counter[link] += 1
             if target_priority_mode == "Low inlink count":
-                cnt = inlink_counter.get(tgt, 0) + 1
-                return max(1.0, 1 + (target_priority_strength - 1) * (1 / np.log(cnt + 1.1)))
-            if target_priority_mode == "URL contains keyword" and target_keyword.lower() in tgt.lower():
-                return target_priority_strength
-            return 1.0
+                st.subheader("📊 Current Inlink Distribution")
+                st.dataframe(
+                    pd.DataFrame({"URL": list(inlink_counter), "Inlink Count": list(inlink_counter.values())})
+                    .sort_values("Inlink Count")
+                )
 
-        def source_boost(src):
-            if source_priority_mode == "URL contains keyword" and source_keyword.lower() in src.lower():
-                return source_priority_strength
-            return 1.0
+            # Build existing links
+            existing = set()
+            for src, links in zip(df["URL"], df["Links"]):
+                for t in links:
+                    if t.startswith('/'):
+                        for u in urls:
+                            if u.endswith(t): existing.add((src, u))
+                    else:
+                        existing.add((src, t))
 
-        outbound = defaultdict(int)
-        recommendations = []
-        progress = st.progress(0)
-        for i, tgt in enumerate(urls):
-            progress.progress((i+1)/len(urls))
-            for j, src in enumerate(urls):
-                if src == tgt or (src, tgt) in existing or outbound[src] >= max_outbound_per_source:
-                    continue
-                score = sim_matrix[j,i]
-                if score < min_similarity_threshold: continue
-                boosted = score * target_boost(tgt) * source_boost(src)
-                recommendations.append((src, tgt, score, boosted))
-                outbound[src] += 1
-        progress.empty()
+            sim_matrix = cosine_similarity(embeddings)
 
-        rec_df = pd.DataFrame(recommendations, columns=["SourceURL","TargetURL","Score","Boosted"]) 
-        # Add titles
-        rec_df["SourceTitle"] = rec_df["SourceURL"].map(titles)
-        rec_df["TargetTitle"] = rec_df["TargetURL"].map(titles)
-        rec_df["Date"] = date.today().isoformat()
-        rec_df["AnchorText"] = ""
+            def target_boost(tgt):
+                if target_priority_mode == "Low inlink count":
+                    cnt = inlink_counter.get(tgt, 0) + 1
+                    return max(1.0, 1 + (target_priority_strength - 1) * (1 / np.log(cnt + 1.1)))
+                if target_priority_mode == "URL contains keyword" and target_keyword.lower() in tgt.lower():
+                    return target_priority_strength
+                return 1.0
 
-        # Generate anchor text
-        for idx, row in rec_df.iterrows():
-            prompt = f"Suggest concise anchor text for linking '{row['SourceTitle']}' to '{row['TargetTitle']}'."
-            try:
-                resp = openai.ChatCompletion.create(
-                    model="gpt-4o-mini-2024-07-18",
-                    messages=[
-                        {"role":"system","content":"You suggest concise anchor text for hyperlinks."},
-                        {"role":"user","content":prompt}
-                    ], temperature=0.7)
-                rec_df.at[idx, "AnchorText"] = resp.choices[0].message.content.strip()
-            except:
-                pass
+            def source_boost(src):
+                if source_priority_mode == "URL contains keyword" and source_keyword.lower() in src.lower():
+                    return source_priority_strength
+                return 1.0
 
-        if not rec_df.empty:
-            st.success(f"✅ Found {len(rec_df)} link opportunities")
-            display_cols = ["SourceURL","SourceTitle","TargetURL","TargetTitle","Score","Boosted","AnchorText","Date"]
-            st.dataframe(rec_df.sort_values("Boosted",ascending=False)[display_cols])
-            st.download_button("📥 Download CSV", rec_df.to_csv(index=False).encode(), "links.csv", "text/csv")
-        else:
-            st.warning("No recommendations with current settings.")
+            outbound = defaultdict(int)
+            recommendations = []
+            progress = st.progress(0)
+            for i, tgt in enumerate(urls):
+                progress.progress((i+1)/len(urls))
+                for j, src in enumerate(urls):
+                    if src == tgt or (src, tgt) in existing or outbound[src] >= max_outbound_per_source:
+                        continue
+                    score = sim_matrix[j,i]
+                    if score < min_similarity_threshold: continue
+                    boosted = score * target_boost(tgt) * source_boost(src)
+                    recommendations.append((src, tgt, score, boosted))
+                    outbound[src] += 1
+            progress.empty()
 
-    except Exception as e:
-        st.error(f"Error: {e}")
-        st.info("Check your file format and settings.")
+            # Build results DataFrame
+            rec_df = pd.DataFrame(recommendations, columns=["SourceURL","TargetURL","Score","Boosted"]) 
+            rec_df["SourceTitle"] = rec_df["SourceURL"].map(titles)
+            rec_df["TargetTitle"] = rec_df["TargetURL"].map(titles)
+            rec_df["Date"] = date.today().isoformat()
+            rec_df["AnchorText"] = ""
+
+            # Generate anchor text
+            for idx, row in rec_df.iterrows():
+                prompt = f"Suggest concise anchor text for linking '{row['SourceTitle']}' to '{row['TargetTitle']}'."
+                try:
+                    resp = openai.ChatCompletion.create(
+                        model="gpt-4o-mini-2024-07-18",
+                        messages=[
+                            {"role":"system","content":"You suggest concise anchor text for hyperlinks."},
+                            {"role":"user","content":prompt}
+                        ], temperature=0.7
+                    )
+                    rec_df.at[idx, "AnchorText"] = resp.choices[0].message.content.strip()
+                except Exception as err:
+                    st.error(f"Anchor-text generation failed at row {idx}: {err}")
+
+            # Display output
+            if not rec_df.empty:
+                st.success(f"✅ Found {len(rec_df)} link opportunities")
+                display_cols = ["SourceURL","SourceTitle","TargetURL","TargetTitle","Score","Boosted","AnchorText","Date"]
+                st.dataframe(rec_df.sort_values("Boosted",ascending=False)[display_cols])
+                st.download_button("📥 Download CSV", rec_df.to_csv(index=False).encode(), "links.csv", "text/csv")
+            else:
+                st.warning("No recommendations with current settings.")
+
+        except Exception as e:
+            st.error(f"Error: {e}")
+            st.info("Check your file format and settings.")
