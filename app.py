@@ -171,7 +171,7 @@ if uploaded_file:
 
             # Generate anchor text
             for idx, row in rec_df.iterrows():
-                prompt = f"Suggest concise anchor text for linking '{row['SourceTitle']}' to '{row['TargetTitle']}'."
+                prompt = f"Suggest concise anchor text that can naturally fit into a sentence for linking '{row['SourceTitle']}' to '{row['TargetTitle']}'."
                 try:
                     resp = openai.chat.completions.create(
                         model="gpt-4o-mini-2024-07-18",
